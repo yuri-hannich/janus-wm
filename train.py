@@ -15,11 +15,16 @@ from utils import get_column_normalizer, get_img_preprocessor, SaveCkptCallback
 
 
 def lejepa_forward(self, batch, stage, cfg):
-    """encode observations, predict next states, compute losses."""
+    """encode observations, predict next states, compute losses.
+    
+    Supports bidirectional training: forward and backward prediction
+    with 50/50 split within each batch.
+    """
 
     ctx_len = cfg.history_size
     n_preds = cfg.num_preds
     lambd = cfg.loss.sigreg.weight
+    bidirectional = cfg.get("bidirectional", False)
 
     # Replace NaN values with 0 (occurs at sequence boundaries)
     batch["action"] = torch.nan_to_num(batch["action"], 0.0)
@@ -29,16 +34,30 @@ def lejepa_forward(self, batch, stage, cfg):
     emb = output["emb"]  # (B, T, D)
     act_emb = output["act_emb"]
 
+    # Forward prediction
     ctx_emb = emb[:, :ctx_len]
-    ctx_act = act_emb[:, : ctx_len]
+    ctx_act = act_emb[:, :ctx_len]
+    tgt_emb = emb[:, n_preds:]
+    pred_emb_fwd = self.model.predict(ctx_emb, ctx_act, is_forward=True)
+    fwd_loss = (pred_emb_fwd - tgt_emb).pow(2).mean()
 
-    tgt_emb = emb[:, n_preds:] # label
-    pred_emb = self.model.predict(ctx_emb, ctx_act) # pred
+    if bidirectional:
+        # Backward prediction: reverse the sequence
+        emb_rev = emb.flip(1)
+        act_emb_rev = act_emb.flip(1)
+        ctx_emb_rev = emb_rev[:, :ctx_len]
+        ctx_act_rev = act_emb_rev[:, :ctx_len]
+        tgt_emb_rev = emb_rev[:, n_preds:]
+        pred_emb_bwd = self.model.predict(ctx_emb_rev, ctx_act_rev, is_forward=False)
+        bwd_loss = (pred_emb_bwd - tgt_emb_rev).pow(2).mean()
+        output["pred_loss"] = (fwd_loss + bwd_loss) / 2
+        output["fwd_loss"] = fwd_loss
+        output["bwd_loss"] = bwd_loss
+    else:
+        output["pred_loss"] = fwd_loss
 
-    # LeWM loss
-    output["pred_loss"] = (pred_emb - tgt_emb).pow(2).mean()
-    output["sigreg_loss"]= self.sigreg(emb.transpose(0, 1))
-    output["loss"] = output["pred_loss"] + lambd * output["sigreg_loss"]  
+    output["sigreg_loss"] = self.sigreg(emb.transpose(0, 1))
+    output["loss"] = output["pred_loss"] + lambd * output["sigreg_loss"]
 
     losses_dict = {f"{stage}/{k}": v.detach() for k, v in output.items() if "loss" in k}
     self.log_dict(losses_dict, on_step=True, sync_dist=True)

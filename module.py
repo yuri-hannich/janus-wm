@@ -102,11 +102,11 @@ class ConditionalBlock(nn.Module):
         nn.init.constant_(self.adaLN_modulation[-1].weight, 0)
         nn.init.constant_(self.adaLN_modulation[-1].bias, 0)
 
-    def forward(self, x, c):
+    def forward(self, x, c, causal=True):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
             self.adaLN_modulation(c).chunk(6, dim=-1)
         )
-        x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
+        x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), causal=causal)
         x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
 
@@ -170,7 +170,7 @@ class Transformer(nn.Module):
                 block_class(hidden_dim, heads, dim_head, mlp_dim, dropout)
             )
 
-    def forward(self, x, c=None):
+    def forward(self, x, c=None, causal=True):
 
         if hasattr(self, "input_proj"):
             x = self.input_proj(x)
@@ -179,7 +179,7 @@ class Transformer(nn.Module):
             c = self.cond_proj(c)
 
         for block in self.layers:
-            x = block(x) if isinstance(block, Block) else block(x, c)
+            x = block(x) if isinstance(block, Block) else block(x, c, causal=causal)
         x = self.norm(x)
 
         if hasattr(self, "output_proj"):
@@ -242,7 +242,12 @@ class MLP(nn.Module):
 
 
 class ARPredictor(nn.Module):
-    """Autoregressive predictor for next-step embedding prediction."""
+    """Autoregressive predictor for next-step embedding prediction.
+    
+    Supports bidirectional prediction via direction embeddings:
+    - direction=0 (FWD): standard causal mask, predict future
+    - direction=1 (BWD): reverse causal mask, predict past
+    """
 
     def __init__(
         self,
@@ -257,10 +262,14 @@ class ARPredictor(nn.Module):
         dim_head=64,
         dropout=0.0,
         emb_dropout=0.0,
+        bidirectional=False,
     ):
         super().__init__()
         self.pos_embedding = nn.Parameter(torch.randn(1, num_frames, input_dim))
         self.dropout = nn.Dropout(emb_dropout)
+        self.bidirectional = bidirectional
+        if bidirectional:
+            self.dir_embedding = nn.Embedding(2, input_dim)  # FWD=0, BWD=1
         self.transformer = Transformer(
             input_dim,
             hidden_dim,
@@ -273,13 +282,25 @@ class ARPredictor(nn.Module):
             block_class=ConditionalBlock,
         )
 
-    def forward(self, x, c):
+    def forward(self, x, c, is_forward=True):
         """
         x: (B, T, d)
         c: (B, T, act_dim)
+        is_forward: if True, standard causal mask; if False, reverse causal (backward prediction)
         """
         T = x.size(1)
         x = x + self.pos_embedding[:, :T]
+        if self.bidirectional:
+            dir_idx = 0 if is_forward else 1
+            dir_emb = self.dir_embedding(torch.tensor(dir_idx, device=x.device))
+            x = x + dir_emb  # broadcast over batch and time
         x = self.dropout(x)
-        x = self.transformer(x, c)
+        # Backward: flip sequence, apply causal attention, flip back
+        if not is_forward:
+            x = x.flip(1)
+            c = c.flip(1)
+            x = self.transformer(x, c, causal=True)
+            x = x.flip(1)
+        else:
+            x = self.transformer(x, c, causal=True)
         return x

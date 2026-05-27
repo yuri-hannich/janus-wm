@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data & Results
+data/
+wandb/
+outputs/
+logs/
+
+# OS
+.DS_Store
+
+# Checkpoints (large)
+*.ckpt
+*.pt
