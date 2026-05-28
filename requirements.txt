@@ -7,5 +7,7 @@ h5py
 hdf5plugin
 imageio
 datasets>=4.0.0
-torch>=2.4.0
+torch>=2.6.0
+torchvision>=0.21.0
 einops>=0.8.0
+transformers>=4.40.0,<5.0.0
