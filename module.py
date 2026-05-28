@@ -102,11 +102,11 @@ class ConditionalBlock(nn.Module):
         nn.init.constant_(self.adaLN_modulation[-1].weight, 0)
         nn.init.constant_(self.adaLN_modulation[-1].bias, 0)
 
-    def forward(self, x, c, causal=True):
+    def forward(self, x, c):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
             self.adaLN_modulation(c).chunk(6, dim=-1)
         )
-        x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), causal=causal)
+        x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
         x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
 
@@ -170,7 +170,7 @@ class Transformer(nn.Module):
                 block_class(hidden_dim, heads, dim_head, mlp_dim, dropout)
             )
 
-    def forward(self, x, c=None, causal=True):
+    def forward(self, x, c=None):
 
         if hasattr(self, "input_proj"):
             x = self.input_proj(x)
@@ -179,7 +179,7 @@ class Transformer(nn.Module):
             c = self.cond_proj(c)
 
         for block in self.layers:
-            x = block(x) if isinstance(block, Block) else block(x, c, causal=causal)
+            x = block(x) if isinstance(block, Block) else block(x, c)
         x = self.norm(x)
 
         if hasattr(self, "output_proj"):
@@ -295,12 +295,8 @@ class ARPredictor(nn.Module):
             dir_emb = self.dir_embedding(torch.tensor(dir_idx, device=x.device))
             x = x + dir_emb  # broadcast over batch and time
         x = self.dropout(x)
-        # Backward: flip sequence, apply causal attention, flip back
-        if not is_forward:
-            x = x.flip(1)
-            c = c.flip(1)
-            x = self.transformer(x, c, causal=True)
-            x = x.flip(1)
-        else:
-            x = self.transformer(x, c, causal=True)
+        # Both forward and backward use standard causal mask (default in Attention).
+        # For backward, train.py already reverses the sequence,
+        # so causal mask naturally prevents attending to "future" (past in original time).
+        x = self.transformer(x, c)
         return x

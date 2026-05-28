@@ -1,0 +1,11 @@
+stable-worldmodel[train]==0.1.0
+stable-pretraining>=0.1.7
+lightning>=2.6.0
+hydra-core>=1.3.2
+wandb
+h5py
+hdf5plugin
+imageio
+datasets>=4.0.0
+torch>=2.4.0
+einops>=0.8.0

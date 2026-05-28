@@ -43,12 +43,15 @@ def lejepa_forward(self, batch, stage, cfg):
 
     if bidirectional:
         # Backward prediction: reverse the sequence
+        # States: [s0,s1,s2,s3] → reversed [s3,s2,s1,s0]
         emb_rev = emb.flip(1)
-        act_emb_rev = act_emb.flip(1)
         ctx_emb_rev = emb_rev[:, :ctx_len]
-        ctx_act_rev = act_emb_rev[:, :ctx_len]
         tgt_emb_rev = emb_rev[:, n_preds:]
-        pred_emb_bwd = self.model.predict(ctx_emb_rev, ctx_act_rev, is_forward=False)
+        # Actions: for backward, state s_t needs "incoming" action a_{t-1}
+        # (the action that transitioned FROM s_{t-1} TO s_t)
+        # e.g. [s3,s2,s1] need [a2,a1,a0] = act_emb[:,:-1].flip(1)
+        act_emb_bwd = act_emb[:, :-1].flip(1)[:, :ctx_len]
+        pred_emb_bwd = self.model.predict(ctx_emb_rev, act_emb_bwd, is_forward=False)
         bwd_loss = (pred_emb_bwd - tgt_emb_rev).pow(2).mean()
         output["pred_loss"] = (fwd_loss + bwd_loss) / 2
         output["fwd_loss"] = fwd_loss

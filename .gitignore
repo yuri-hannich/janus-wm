@@ -24,6 +24,9 @@ data/
 wandb/
 outputs/
 logs/
+lightning_logs/
+environment*.json
+requirements_frozen*.txt
 
 # OS
 .DS_Store
